@@ -33,5 +33,6 @@ AI Interview is a next-generation, AI-powered interview preparation platform des
 4. **Interview**: Face 10 challenging questions, answer using your voice or keyboard, and receive instant feedback.
 5. **Analyze**: Review your overall performance in the Analytics dashboard.
 
+---
 
-
+Built with ❤️ using Google AI Studio.

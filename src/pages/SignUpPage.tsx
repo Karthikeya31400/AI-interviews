@@ -31,8 +31,18 @@ export function SignUpPage() {
       await updateProfile(userCredential.user, { displayName: name });
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Failed to create account');
       console.error(err);
+      if (err.code === 'auth/email-already-in-use') {
+        setError('This email is already registered. Please sign in instead.');
+      } else if (err.code === 'auth/operation-not-allowed') {
+        setError('Email/Password sign up is currently disabled. Please enable it in the Firebase Console or use Google login.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Password is too weak. Please use at least 6 characters.');
+      } else if (err.code === 'auth/invalid-email') {
+        setError('Please enter a valid email address.');
+      } else {
+        setError(err.message || 'Failed to create account');
+      }
     } finally {
       setIsLoading(false);
     }

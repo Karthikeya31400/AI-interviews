@@ -29,8 +29,16 @@ export function LoginPage() {
       await signInWithEmailAndPassword(auth, email, password);
       navigate('/dashboard');
     } catch (err: any) {
-      setError(err.message || 'Failed to sign in');
       console.error(err);
+      if (err.code === 'auth/operation-not-allowed') {
+        setError('Email/Password sign in is currently disabled. Please enable it in the Firebase Console or use Google login.');
+      } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
+        setError('Invalid email or password. Please try again.');
+      } else if (err.code === 'auth/too-many-requests') {
+        setError('Too many failed attempts. Please try again later.');
+      } else {
+        setError(err.message || 'Failed to sign in');
+      }
     } finally {
       setIsLoading(false);
     }
