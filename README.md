@@ -35,4 +35,4 @@ AI Interview is a next-generation, AI-powered interview preparation platform des
 
 ---
 
-Built with ❤️ using Google AI Studio.
+
