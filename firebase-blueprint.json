@@ -1,0 +1,66 @@
+{
+  "entities": {
+    "UserProfile": {
+      "title": "User Profile",
+      "description": "Public and private user data",
+      "type": "object",
+      "properties": {
+        "uid": { "type": "string" },
+        "email": { "type": "string" },
+        "displayName": { "type": "string" },
+        "photoURL": { "type": "string" },
+        "role": { "type": "string", "enum": ["USER", "ADMIN"] },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["uid", "email", "role"]
+    },
+    "Interview": {
+      "title": "Interview Session",
+      "description": "Details of a completed or ongoing interview session",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "type": { "type": "string", "enum": ["HR", "Technical", "Behavioral"] },
+        "position": { "type": "string" },
+        "status": { "type": "string", "enum": ["ongoing", "completed"] },
+        "score": { "type": "number" },
+        "feedback": { "type": "string" },
+        "questions": { "type": "array" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "type", "position", "status", "createdAt"]
+    },
+    "ResumeAnalysis": {
+      "title": "Resume Analysis",
+      "description": "ATS and feedback results for a resume",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "fileName": { "type": "string" },
+        "atsScore": { "type": "number" },
+        "feedback": { "type": "string" },
+        "improvements": { "type": "array" },
+        "missingKeywords": { "type": "array" },
+        "skillGaps": { "type": "array" },
+        "createdAt": { "type": "number" }
+      },
+      "required": ["id", "userId", "atsScore", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "UserProfile",
+      "description": "Users of the platform"
+    },
+    "/interviews/{interviewId}": {
+      "schema": "Interview",
+      "description": "Interview session records"
+    },
+    "/resumeAnalyses/{analysisId}": {
+      "schema": "ResumeAnalysis",
+      "description": "Resume analysis reports"
+    }
+  }
+}

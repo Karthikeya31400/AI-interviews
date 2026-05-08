@@ -1,0 +1,93 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Phase 3: Primitives
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function isAdmin() {
+      return isSignedIn() && (
+        request.auth.token.email == 'pillkarthikeya63761241@gmail.com' ||
+        (exists(/databases/$(database)/documents/users/$(request.auth.uid)) && 
+         get(/databases/$(database)/documents/users/$(request.auth.uid)).data.role == 'ADMIN')
+      );
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    // Phase 4: Entity Validation
+    function isValidUserProfile(data) {
+      return data.keys().hasAll(['uid', 'email', 'role', 'createdAt']) &&
+             data.keys().size() <= 7 &&
+             data.uid == request.auth.uid &&
+             data.email is string && data.email.size() <= 100 &&
+             data.role in ['USER', 'ADMIN'] &&
+             data.createdAt == request.time;
+    }
+
+    function isValidInterview(data) {
+      return data.keys().hasAll(['id', 'userId', 'type', 'position', 'status', 'createdAt']) &&
+             data.keys().size() <= 10 &&
+             data.userId == request.auth.uid &&
+             data.type in ['HR', 'Technical', 'Behavioral'] &&
+             data.position is string && data.position.size() <= 100 &&
+             data.status in ['ongoing', 'completed'] &&
+             (data.score == null || (data.score is number && data.score >= 0 && data.score <= 100)) &&
+             data.createdAt is timestamp;
+    }
+
+    function isValidResumeAnalysis(data) {
+      return data.keys().hasAll(['id', 'userId', 'fileName', 'atsScore', 'createdAt']) &&
+             data.userId == request.auth.uid &&
+             data.atsScore is number && data.atsScore >= 0 && data.atsScore <= 100 &&
+             data.createdAt is timestamp;
+    }
+
+    // Match blocks
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create: if isOwner(userId) && isValidUserProfile(incoming()) && 
+                    (incoming().role == 'USER' || (incoming().role == 'ADMIN' && request.auth.token.email == 'pillkarthikeya63761241@gmail.com'));
+      allow update: if (isOwner(userId) && isValidUserProfile(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['displayName', 'photoURL'])) ||
+                    (isAdmin() && incoming().diff(existing()).affectedKeys().hasOnly(['role']));
+    }
+
+    match /interviews/{interviewId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidInterview(incoming()) && isValidId(interviewId);
+      allow update: if isSignedIn() && isOwner(existing().userId) && isValidInterview(incoming()) &&
+                    incoming().diff(existing()).affectedKeys().hasOnly(['status', 'score', 'feedback', 'questions']);
+    }
+
+    match /resumeAnalyses/{analysisId} {
+      allow get: if isSignedIn() && existing().userId == request.auth.uid;
+      allow list: if isSignedIn() && resource.data.userId == request.auth.uid;
+      allow create: if isSignedIn() && isValidResumeAnalysis(incoming()) && isValidId(analysisId);
+      allow delete: if isSignedIn() && existing().userId == request.auth.uid;
+    }
+  }
+}

@@ -1,0 +1,15 @@
+{
+  "name": "AI Interview",
+  "description": "Premium AI-powered interview preparation platform with mock interviews, resume analysis, and coding practice.",
+  "requestFramePermissions": [
+    "camera",
+    "microphone"
+  ],
+  "majorCapabilities": [
+    "AI-powered mock interviews",
+    "ATS resume analysis",
+    "Coding interview prep",
+    "AI career mentorship",
+    "Advanced performance analytics"
+  ]
+}
