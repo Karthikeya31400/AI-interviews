@@ -49,8 +49,72 @@ export function InterviewPage() {
   const [autoSubmit, setAutoSubmit] = useState(false);
   const [resumeFileName, setResumeFileName] = useState<string | null>(null);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
+  const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
+
+  useEffect(() => {
+    if (typeof window !== 'undefined' && ('webkitSpeechRecognition' in window || 'SpeechRecognition' in window)) {
+      const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
+      const recognition = new SpeechRecognition();
+      recognition.continuous = true;
+      recognition.interimResults = false;
+      recognition.lang = 'en-US';
+
+      recognition.onstart = () => {
+        setIsListening(true);
+        setLastConfidence(0);
+      };
+
+      recognition.onend = () => {
+        setIsListening(false);
+      };
+
+      recognition.onresult = (event: any) => {
+        const results = event.results;
+        const lastResult = results[results.length - 1];
+        if (lastResult.isFinal) {
+          const transcript = lastResult[0].transcript;
+          const confidence = lastResult[0].confidence;
+          setLastConfidence(confidence);
+          setInput(prev => prev + (prev.endsWith(' ') || !prev ? '' : ' ') + transcript);
+          
+          // Auto-submit only if requested and we have some content
+          // We add a slight delay to allow for more continuous speech if needed
+        }
+      };
+
+      recognition.onerror = (event: any) => {
+        console.error('Speech recognition error', event.error);
+        if (event.error === 'network') {
+          alert('Network error in speech recognition. Please check your connection.');
+        }
+      };
+
+      recognitionRef.current = recognition;
+    }
+
+    return () => {
+      if (recognitionRef.current) {
+        recognitionRef.current.stop();
+      }
+      window.speechSynthesis.cancel();
+    };
+  }, []);
+
+  // Auto-submit logic for voice
+  useEffect(() => {
+    let timeout: any;
+    if (autoSubmit && input.trim() && !isLoading && isListening) {
+      timeout = setTimeout(() => {
+        handleSend();
+        if (recognitionRef.current) {
+          recognitionRef.current.stop();
+        }
+      }, 10000); // 10 seconds of silence
+    }
+    return () => clearTimeout(timeout);
+  }, [autoSubmit, input, isLoading, isListening]);
 
   const totalQuestions = 10;
   const questionCount = messages.filter(m => m.role === 'assistant').length;
@@ -130,43 +194,33 @@ export function InterviewPage() {
     synth.cancel();
     const utterance = new SpeechSynthesisUtterance(text);
     utterance.rate = 1.0;
-    utterance.pitch = 1.1;
-    synth.speak(utterance);
+    utterance.pitch = 1.0;
+    utterance.volume = 1.0;
+    
+    // Some browsers require a user interaction to start synthesis
+    // or might have issues if spoken too quickly after another.
+    setTimeout(() => {
+      synth.speak(utterance);
+    }, 100);
   };
 
   const toggleVoice = () => {
-    if (!('webkitSpeechRecognition' in window) && !('SpeechRecognition' in window)) {
-      alert("Your browser does not support voice input.");
+    if (!recognitionRef.current) {
+      alert("Your browser does not support voice input or it's not initialized.");
       return;
     }
 
-    const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
-    const recognition = new SpeechRecognition();
-
-    recognition.continuous = false;
-    recognition.interimResults = false;
-    recognition.lang = 'en-US';
-
-    recognition.onstart = () => {
-      setIsListening(true);
-      setLastConfidence(0);
-    };
-    recognition.onend = () => setIsListening(false);
-    recognition.onresult = (event: any) => {
-      const transcript = event.results[0][0].transcript;
-      const confidence = event.results[0][0].confidence;
-      setLastConfidence(confidence);
-      setInput(prev => prev + (prev ? ' ' : '') + transcript);
-      
-      if (autoSubmit) {
-        setTimeout(() => handleSend(), 500);
-      }
-    };
-
     if (isListening) {
-      recognition.stop();
+      recognitionRef.current.stop();
     } else {
-      recognition.start();
+      try {
+        recognitionRef.current.start();
+      } catch (error) {
+        console.error('Speech recognition start failed:', error);
+        // Sometimes it might already be started or in a weird state
+        recognitionRef.current.stop();
+        setTimeout(() => recognitionRef.current.start(), 100);
+      }
     }
   };
 
@@ -175,11 +229,14 @@ export function InterviewPage() {
     setIsLoading(true);
     try {
       const qs = await aiService.generateInterviewQuestions(type, position, totalQuestions);
+      const firstMessage = `Welcome to your ${type} interview for the ${position} position ${mode === 'resume' ? 'based on your resume' : ''}. I'm your AI interviewer. Let's start with the first question:\n\n**${qs[0]}**`;
       setMessages([{ 
         role: 'assistant', 
-        content: `Welcome to your ${type} interview for the ${position} position ${mode === 'resume' ? 'based on your resume' : ''}. I'm your AI interviewer. Let's start with the first question:\n\n**${qs[0]}**` 
+        content: firstMessage 
       }]);
       setStep('interview');
+      // Speak the first question
+      speak(firstMessage);
     } catch (error) {
       console.error(error);
     } finally {
