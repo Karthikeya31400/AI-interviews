@@ -16,8 +16,8 @@ import {
 } from 'lucide-react';
 import { aiService } from '../services/aiService';
 import { motion, AnimatePresence } from 'motion/react';
-import { doc, getDocFromServer } from 'firebase/firestore';
-import { db } from '../lib/firebase';
+import { dataService } from '../services/dataService';
+import { useAuth } from '../context/AuthContext';
 import * as pdfjs from 'pdfjs-dist';
 import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 
@@ -25,6 +25,7 @@ import pdfWorker from 'pdfjs-dist/build/pdf.worker.mjs?url';
 pdfjs.GlobalWorkerOptions.workerSrc = pdfWorker;
 
 export function ResumePage() {
+  const { user } = useAuth();
   const [isUploading, setIsUploading] = useState(false);
   const [analysis, setAnalysis] = useState<any>(null);
   const [text, setText] = useState('');
@@ -33,19 +34,6 @@ export function ResumePage() {
   const [isRefining, setIsRefining] = useState(false);
   const [refinedResume, setRefinedResume] = useState<string | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
-
-  useEffect(() => {
-    async function testConnection() {
-      try {
-        await getDocFromServer(doc(db, 'test', 'connection'));
-      } catch (error) {
-        if(error instanceof Error && error.message.includes('the client is offline')) {
-          console.error("Please check your Firebase configuration.");
-        }
-      }
-    }
-    testConnection();
-  }, []);
 
   const handleRefineResume = async () => {
     if (!text || !analysis) return;
@@ -129,6 +117,14 @@ export function ResumePage() {
       setText(extractedText);
       const result = await aiService.analyzeResume(extractedText);
       setAnalysis(result);
+
+      if (user) {
+        await dataService.saveResumeAnalysis({
+          userId: user.uid,
+          fileName: file.name,
+          analysis: result
+        });
+      }
     } catch (error) {
       console.error('Extraction error:', error);
       alert('Failed to extract text from resume. Please try pasting the text manually.');
@@ -159,6 +155,13 @@ export function ResumePage() {
     try {
       const result = await aiService.analyzeResume(text);
       setAnalysis(result);
+      if (user) {
+        await dataService.saveResumeAnalysis({
+          userId: user.uid,
+          fileName: fileName || 'manual_entry.txt',
+          analysis: result
+        });
+      }
     } catch (error) {
       console.error(error);
     } finally {

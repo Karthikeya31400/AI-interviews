@@ -19,8 +19,9 @@ import { aiService } from '../services/aiService';
 import { motion, AnimatePresence } from 'motion/react';
 import { useNavigate } from 'react-router-dom';
 import ReactMarkdown from 'react-markdown';
-import { doc, getDocFromServer, setDoc, collection } from 'firebase/firestore';
-import { db, handleFirestoreError, OperationType } from '../lib/firebase';
+import { dataService } from '../services/dataService';
+import { jsPDF } from 'jspdf';
+import { useAuth } from '../context/AuthContext';
 import { cn } from '../lib/utils';
 
 interface ChatMessage {
@@ -30,10 +31,20 @@ interface ChatMessage {
     score?: number;
     feedback?: string;
     clarity?: number;
+    metrics?: {
+      relevance: number;
+      technicalDepth: number;
+      communicationClarity: number;
+    };
+    stress?: {
+      wpm: number;
+      fillers: number;
+    };
   };
 }
 
 export function InterviewPage() {
+  const { user } = useAuth();
   const [step, setStep] = useState<'setup' | 'interview' | 'evaluation'>('setup');
   const [position, setPosition] = useState('');
   const [type, setType] = useState<'HR' | 'Technical' | 'Behavioral'>('Technical');
@@ -45,10 +56,79 @@ export function InterviewPage() {
   const [evaluation, setEvaluation] = useState<any>(null);
   const [isListening, setIsListening] = useState(false);
   const [lastConfidence, setLastConfidence] = useState(0);
+  const [interimInput, setInterimInput] = useState('');
+  const [realTimeWPM, setRealTimeWPM] = useState(0);
+  const [audioData, setAudioData] = useState<number[]>(new Array(8).fill(0));
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const analyserRef = useRef<AnalyserNode | null>(null);
+  const dataArrayRef = useRef<Uint8Array | null>(null);
+  const animationFrameRef = useRef<number | null>(null);
+  const speakingStartTimeRef = useRef<number | null>(null);
   const [useVoice, setUseVoice] = useState(true);
   const [autoSubmit, setAutoSubmit] = useState(false);
   const [resumeFileName, setResumeFileName] = useState<string | null>(null);
   const [isUploadingResume, setIsUploadingResume] = useState(false);
+  const [sessionStats, setSessionStats] = useState({
+    totalWords: 0,
+    totalFillers: 0,
+    totalTime: 0
+  });
+
+  const startAudioAnalysis = async () => {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      const audioContext = new AudioContextClass();
+      const source = audioContext.createMediaStreamSource(stream);
+      const analyser = audioContext.createAnalyser();
+      
+      analyser.fftSize = 64; // Smaller for fewer bars
+      const bufferLength = analyser.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      source.connect(analyser);
+      
+      audioContextRef.current = audioContext;
+      analyserRef.current = analyser;
+      dataArrayRef.current = dataArray;
+
+      const update = () => {
+        if (!analyserRef.current || !dataArrayRef.current) return;
+        analyserRef.current.getByteFrequencyData(dataArrayRef.current);
+        
+        // Take a subset of frequencies for our bars
+        const values = [];
+        const step = Math.floor(dataArrayRef.current.length / 8);
+        for (let i = 0; i < 8; i++) {
+          values.push(dataArrayRef.current[i * step] / 255);
+        }
+        setAudioData(values);
+        animationFrameRef.current = requestAnimationFrame(update);
+      };
+      
+      update();
+    } catch (err) {
+      console.error('Microphone access denied or error:', err);
+    }
+  };
+
+  const stopAudioAnalysis = () => {
+    if (animationFrameRef.current) {
+      cancelAnimationFrame(animationFrameRef.current);
+    }
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+    }
+  };
+
+  useEffect(() => {
+    if (isListening) {
+      startAudioAnalysis();
+    } else {
+      stopAudioAnalysis();
+    }
+    return () => stopAudioAnalysis();
+  }, [isListening]);
   const recognitionRef = useRef<any>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const navigate = useNavigate();
@@ -58,29 +138,41 @@ export function InterviewPage() {
       const SpeechRecognition = (window as any).webkitSpeechRecognition || (window as any).SpeechRecognition;
       const recognition = new SpeechRecognition();
       recognition.continuous = true;
-      recognition.interimResults = false;
+      recognition.interimResults = true;
       recognition.lang = 'en-US';
 
       recognition.onstart = () => {
         setIsListening(true);
         setLastConfidence(0);
+        setInterimInput('');
+        speakingStartTimeRef.current = Date.now();
       };
 
       recognition.onend = () => {
         setIsListening(false);
+        setInterimInput('');
+        speakingStartTimeRef.current = null;
       };
 
       recognition.onresult = (event: any) => {
-        const results = event.results;
-        const lastResult = results[results.length - 1];
-        if (lastResult.isFinal) {
-          const transcript = lastResult[0].transcript;
-          const confidence = lastResult[0].confidence;
+        let interim = '';
+        let final = '';
+
+        for (let i = event.resultIndex; i < event.results.length; ++i) {
+          if (event.results[i].isFinal) {
+            final += event.results[i][0].transcript;
+          } else {
+            interim += event.results[i][0].transcript;
+          }
+        }
+
+        if (final) {
+          const confidence = event.results[event.results.length - 1][0].confidence;
           setLastConfidence(confidence);
-          setInput(prev => prev + (prev.endsWith(' ') || !prev ? '' : ' ') + transcript);
-          
-          // Auto-submit only if requested and we have some content
-          // We add a slight delay to allow for more continuous speech if needed
+          setInput(prev => prev + (prev.endsWith(' ') || !prev ? '' : ' ') + final);
+          setInterimInput('');
+        } else {
+          setInterimInput(interim);
         }
       };
 
@@ -101,6 +193,19 @@ export function InterviewPage() {
       window.speechSynthesis.cancel();
     };
   }, []);
+
+  // Real-time WPM calculation
+  useEffect(() => {
+    if (isListening && speakingStartTimeRef.current && (input.trim() || interimInput.trim())) {
+      const words = (input.trim() + ' ' + interimInput.trim()).split(/\s+/).filter(Boolean).length;
+      const durationInMinutes = (Date.now() - speakingStartTimeRef.current) / 60000;
+      if (durationInMinutes > 0.01) { // avoid division by zero near start
+        setRealTimeWPM(Math.round(words / durationInMinutes));
+      }
+    } else if (!isListening) {
+      setRealTimeWPM(0);
+    }
+  }, [input, interimInput, isListening]);
 
   // Auto-submit logic for voice
   useEffect(() => {
@@ -229,14 +334,15 @@ export function InterviewPage() {
     setIsLoading(true);
     try {
       const qs = await aiService.generateInterviewQuestions(type, position, totalQuestions);
-      const firstMessage = `Welcome to your ${type} interview for the ${position} position ${mode === 'resume' ? 'based on your resume' : ''}. I'm your AI interviewer. Let's start with the first question:\n\n**${qs[0]}**`;
+      const firstMessageText = qs[0];
+      const greeting = `Welcome to your ${type} interview for the ${position} position ${mode === 'resume' ? 'based on your resume' : ''}. I'm your AI interviewer. Let's start with the first question:\n\n**${firstMessageText}**`;
+      
       setMessages([{ 
         role: 'assistant', 
-        content: firstMessage 
+        content: greeting
       }]);
       setStep('interview');
-      // Speak the first question
-      speak(firstMessage);
+      speak(greeting);
     } catch (error) {
       console.error(error);
     } finally {
@@ -244,17 +350,44 @@ export function InterviewPage() {
     }
   };
 
+  const countFillers = (text: string) => {
+    const fillers = ['um', 'uh', 'like', 'you know', 'actually', 'basically', 'sort of'];
+    const words = text.toLowerCase().split(/\s+/);
+    return words.filter(w => fillers.includes(w)).length;
+  };
+
   const handleSend = async () => {
     if (!input.trim() || isLoading) return;
+    
+    const wordCount = input.trim().split(/\s+/).length;
+    const fillerCount = countFillers(input);
     
     const userMsg: ChatMessage = { 
       role: 'user', 
       content: input,
-      metadata: { clarity: Math.round(lastConfidence * 100) || 85 }
+      metadata: { 
+        clarity: Math.round(lastConfidence * 100) || 85,
+        stress: {
+          wpm: Math.round(wordCount / 1.5), // rough estimate for 1.5 mins of speaking
+          fillers: fillerCount
+        }
+      }
     };
+
+    setSessionStats(prev => ({
+      totalWords: prev.totalWords + wordCount,
+      totalFillers: prev.totalFillers + fillerCount,
+      totalTime: prev.totalTime + 1 // increment turns
+    }));
+
     setMessages(prev => [...prev, userMsg]);
     setInput('');
     setIsLoading(true);
+    
+    // Stop listening while processing and AI is speaking
+    if (recognitionRef.current) {
+      recognitionRef.current.stop();
+    }
 
     try {
       const result = await aiService.interviewChat(
@@ -265,19 +398,23 @@ export function InterviewPage() {
         mode === 'resume' ? resumeText : undefined
       );
       
+      const nextQuestionCount = questionCount + 1;
+      const isActuallyComplete = nextQuestionCount >= totalQuestions;
+
       const assistantMsg: ChatMessage = { 
         role: 'assistant', 
-        content: isComplete ? "Thank you for completing the interview. I've gathered enough information to provide an evaluation." : result.question,
+        content: isActuallyComplete ? "Great job! This concludes our interview. I've gathered enough information to provide an evaluation. Give me a moment to analyze your performance." : result.question,
         metadata: {
           score: result.score,
-          feedback: result.feedback
+          feedback: result.feedback,
+          metrics: result.metrics
         }
       };
       setMessages(prev => [...prev, assistantMsg]);
       speak(assistantMsg.content);
 
-      if (isComplete) {
-        setTimeout(() => endAndEvaluate(), 2000);
+      if (isActuallyComplete) {
+        setTimeout(() => endAndEvaluate(), 3000);
       }
     } catch (error) {
       console.error(error);
@@ -289,17 +426,99 @@ export function InterviewPage() {
   const endAndEvaluate = async () => {
     setIsLoading(true);
     try {
+      // Create a final transcript including the closing message just added
+      const finalHistory = messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user' as any, text: m.content }));
+      
       const result = await aiService.analyzeInterviewPerformance(
-        messages.map(m => ({ role: m.role === 'assistant' ? 'model' : 'user', text: m.content })),
-        position
+        finalHistory,
+        position,
+        sessionStats
       );
-      setEvaluation(result);
+      
+      const evaluationData = {
+        ...result,
+        stats: sessionStats
+      };
+      
+      setEvaluation(evaluationData);
+
+      // Save to Backend (Local SQLite Persistence)
+      if (user) {
+        try {
+          await dataService.saveInterview({
+            userId: user.uid,
+            type,
+            position,
+            status: 'completed',
+            score: result.technicalAccuracy ? Math.round((result.technicalAccuracy * 10 + result.communicationClarity * 10) / 2) : 75,
+            feedback: result.improvements?.[0] || "Great session!",
+            questions: messages.filter(m => m.role === 'assistant').map(m => m.content),
+            evaluation: evaluationData
+          });
+        } catch (error) {
+          console.error('Failed to save interview:', error);
+        }
+      }
+
       setStep('evaluation');
     } catch (error) {
       console.error(error);
     } finally {
       setIsLoading(false);
     }
+  };
+
+  const downloadCertificate = () => {
+    if (!evaluation || !user) return;
+    
+    const doc = new jsPDF({
+      orientation: 'landscape',
+      unit: 'mm',
+      format: 'a4'
+    });
+
+    // Design the certificate
+    doc.setFillColor(10, 10, 20); // Dark background
+    doc.rect(0, 0, 297, 210, 'F');
+    
+    // Border
+    doc.setDrawColor(124, 58, 237); // Purple
+    doc.setLineWidth(2);
+    doc.rect(10, 10, 277, 190);
+    
+    doc.setTextColor(255, 255, 255);
+    doc.setFontSize(40);
+    doc.setFont('helvetica', 'bold');
+    doc.text('CERTIFICATE OF ACHIEVEMENT', 148.5, 50, { align: 'center' });
+    
+    doc.setFontSize(16);
+    doc.setFont('helvetica', 'normal');
+    doc.text('This is to certify that', 148.5, 75, { align: 'center' });
+    
+    doc.setFontSize(24);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(124, 58, 237);
+    doc.text(user.displayName || user.email || 'Candidate', 148.5, 95, { align: 'center' });
+    
+    doc.setFontSize(16);
+    doc.setTextColor(255, 255, 255);
+    doc.setFont('helvetica', 'normal');
+    doc.text(`has successfully completed a ${type} Mock Interview for the position of`, 148.5, 115, { align: 'center' });
+    
+    doc.setFontSize(20);
+    doc.setFont('helvetica', 'bold');
+    doc.text(position, 148.5, 130, { align: 'center' });
+    
+    doc.setFontSize(14);
+    doc.setFont('helvetica', 'normal');
+    const score = evaluation.technicalAccuracy ? Math.round((evaluation.technicalAccuracy * 10 + (parseInt(evaluation.communicationClarity) || 8) * 10) / 2) : 75;
+    doc.text(`Performance Score: ${score}%`, 148.5, 150, { align: 'center' });
+    
+    doc.setFontSize(10);
+    doc.text(`Date: ${new Date().toLocaleDateString()}`, 148.5, 175, { align: 'center' });
+    doc.text('Verified by AI Interview Proxy', 148.5, 182, { align: 'center' });
+
+    doc.save(`Interview_Certificate_${position.replace(/\s+/g, '_')}.pdf`);
   };
 
   return (
@@ -476,24 +695,47 @@ export function InterviewPage() {
                       msg.role === 'assistant' ? "bg-white/5 text-slate-200" : "bg-purple-600 text-white"
                     )}>
                       {msg.role === 'assistant' && msg.metadata?.score !== undefined && (
-                        <div className="flex items-center gap-3 mb-3 pb-3 border-b border-white/5">
-                           <div className={cn(
-                             "px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest",
-                             msg.metadata.score > 80 ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-500"
-                           )}>
-                              Last Answer: {msg.metadata.score}%
+                        <div className="space-y-3 mb-4 pb-4 border-b border-white/5">
+                           <div className="flex items-center justify-between">
+                              <div className={cn(
+                                "px-2 py-0.5 rounded text-[10px] font-black uppercase tracking-widest",
+                                msg.metadata.score > 80 ? "bg-green-500/10 text-green-400" : "bg-yellow-500/10 text-yellow-500"
+                              )}>
+                                 Last Answer: {msg.metadata.score}%
+                              </div>
+                              <p className="text-[10px] text-slate-500 font-medium italic max-w-[200px] truncate">{msg.metadata.feedback}</p>
                            </div>
-                           <p className="text-[10px] text-slate-500 font-medium italic truncate">{msg.metadata.feedback}</p>
+                           
+                           {msg.metadata.metrics && (
+                             <div className="grid grid-cols-3 gap-2">
+                               {[
+                                 { label: 'Relevance', val: msg.metadata.metrics.relevance },
+                                 { label: 'Depth', val: msg.metadata.metrics.technicalDepth },
+                                 { label: 'Clarity', val: msg.metadata.metrics.communicationClarity }
+                               ].map(m => (
+                                 <div key={m.label} className="bg-white/5 rounded-lg p-2 flex flex-col items-center">
+                                   <div className="text-[8px] font-bold text-slate-500 uppercase">{m.label}</div>
+                                   <div className="text-xs font-black text-purple-400">{m.val}/10</div>
+                                 </div>
+                               ))}
+                             </div>
+                           )}
                         </div>
                       )}
                       <div className="markdown-body prose prose-invert prose-sm">
                         <ReactMarkdown>{msg.content}</ReactMarkdown>
                       </div>
                       
-                      {msg.role === 'user' && msg.metadata?.clarity !== undefined && (
-                        <div className="mt-2 flex items-center gap-2 text-[9px] font-black uppercase tracking-tighter opacity-50">
-                           <Activity className="w-3 h-3" />
-                           Voice Clarity: {msg.metadata.clarity}%
+                      {msg.role === 'user' && msg.metadata?.stress && (
+                        <div className="mt-2 flex items-center gap-4 text-[9px] font-black uppercase tracking-tighter opacity-50">
+                           <div className="flex items-center gap-1">
+                              <Activity className="w-3 h-3 text-purple-400" />
+                              Clarity: {msg.metadata.clarity}%
+                           </div>
+                           <div className="flex items-center gap-1">
+                              <Trophy className="w-3 h-3 text-yellow-400" />
+                              Fillers: {msg.metadata.stress.fillers}
+                           </div>
                         </div>
                       )}
                     </div>
@@ -535,21 +777,35 @@ export function InterviewPage() {
                 <button 
                   onClick={toggleVoice}
                   className={cn(
-                    "w-12 h-12 rounded-xl border border-white/10 flex items-center justify-center transition-all",
-                    isListening ? "bg-red-500/20 text-red-500 border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.3)] animate-pulse" : "text-slate-400 hover:text-white hover:bg-white/5"
+                    "w-12 h-12 rounded-xl border border-white/10 flex items-center justify-center transition-all relative",
+                    isListening ? "bg-red-500/20 text-red-500 border-red-500 shadow-[0_0_15px_rgba(239,68,68,0.3)]" : "text-slate-400 hover:text-white hover:bg-white/5"
                   )}
                 >
                   <Mic className="w-5 h-5" />
+                  {isListening && (
+                    <motion.div 
+                      layoutId="listening-pulse"
+                      className="absolute -inset-1 rounded-xl border border-red-500/50"
+                      animate={{ scale: [1, 1.2, 1], opacity: [0.5, 0, 0.5] }}
+                      transition={{ duration: 2, repeat: Infinity }}
+                    />
+                  )}
                 </button>
                 <div className="flex-1 relative">
                   <input 
                     type="text" 
-                    value={input}
+                    value={input + (interimInput ? (input ? ' ' : '') + interimInput : '')}
                     onChange={(e) => setInput(e.target.value)}
                     onKeyPress={(e) => e.key === 'Enter' && handleSend()}
                     placeholder="Type your response here..."
                     className="w-full h-12 bg-white/5 border border-white/10 rounded-xl px-4 py-3 focus:outline-none focus:ring-1 focus:ring-purple-500 font-medium text-sm transition-all pr-12"
                   />
+                  {isListening && interimInput && (
+                    <div className="absolute left-4 top-1/2 -translate-y-1/2 pointer-events-none opacity-50 flex gap-1">
+                      <span className="invisible">{input}</span>
+                      <span className="text-purple-400 italic font-medium">{interimInput}</span>
+                    </div>
+                  )}
                   <button 
                     onClick={handleSend}
                     disabled={!input.trim() || isLoading}
@@ -559,6 +815,59 @@ export function InterviewPage() {
                   </button>
                 </div>
               </div>
+
+              {isListening && (
+                <motion.div 
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  className="mt-4 flex items-center justify-between px-2"
+                >
+                  <div className="flex items-center gap-6">
+                     <div className="flex items-center gap-2">
+                        <div className="flex gap-1 items-end h-4 w-12">
+                           {audioData.map((val, i) => (
+                             <motion.div 
+                               key={i}
+                               animate={{ 
+                                 height: `${Math.max(4, val * 16)}px`,
+                                 opacity: [0.5, 1, 0.5] 
+                               }}
+                               transition={{ duration: 0.1 }}
+                               className="w-1 bg-purple-400 rounded-full"
+                             />
+                           ))}
+                        </div>
+                        <span className="text-[10px] font-black text-purple-400 uppercase tracking-widest">
+                           {interimInput ? 'User Speaking...' : 'Listening'}
+                        </span>
+                     </div>
+                     
+                     <div className="flex items-center gap-4">
+                        <div className="flex flex-col">
+                           <span className="text-[8px] text-slate-500 font-bold uppercase tracking-tighter">Speech Rate</span>
+                           <span className="text-xs font-black text-white">{realTimeWPM} WPM</span>
+                        </div>
+                        <div className="flex flex-col">
+                           <span className="text-[8px] text-slate-500 font-bold uppercase tracking-tighter">Fillers</span>
+                           <span className="text-xs font-black text-red-400">{countFillers(input)}</span>
+                        </div>
+                     </div>
+                  </div>
+
+                  <div className="flex items-center gap-2">
+                     <div className="w-48 h-1 bg-white/5 rounded-full overflow-hidden">
+                        <motion.div 
+                           animate={{ width: `${Math.min(100, (realTimeWPM / 150) * 100)}%` }}
+                           className={cn(
+                             "h-full transition-all duration-500",
+                             realTimeWPM > 160 ? "bg-red-500" : realTimeWPM > 130 ? "bg-yellow-500" : "bg-purple-500"
+                           )}
+                        />
+                     </div>
+                     <span className="text-[8px] font-bold text-slate-500 uppercase">Stress Meter</span>
+                  </div>
+                </motion.div>
+              )}
             </div>
           </motion.div>
         )}
@@ -589,11 +898,21 @@ export function InterviewPage() {
                     <div className="text-4xl font-black gradient-text">{evaluation.technicalAccuracy}/10</div>
                  </div>
                  <div className="md:col-span-2 p-8 rounded-3xl bg-white/5 border border-white/10">
-                    <h3 className="font-bold mb-2 flex items-center gap-2 text-sm">
-                      <AlertCircle className="w-4 h-4 text-purple-400" />
-                      Filler Words & Pacing
+                    <h3 className="font-bold mb-4 flex items-center gap-2 text-sm">
+                      <Activity className="w-4 h-4 text-purple-400" />
+                      Stress & Pacing Analysis
                     </h3>
-                    <p className="text-slate-300 text-xs leading-relaxed">{evaluation.fillerWordUsage}</p>
+                    <div className="grid grid-cols-2 gap-4 mb-6">
+                       <div className="bg-white/5 rounded-2xl p-4">
+                          <div className="text-[10px] font-black text-slate-500 uppercase mb-1">Total Words</div>
+                          <div className="text-xl font-black text-white">{evaluation.stats?.totalWords || 0}</div>
+                       </div>
+                       <div className="bg-white/5 rounded-2xl p-4">
+                          <div className="text-[10px] font-black text-slate-500 uppercase mb-1">Filler Words</div>
+                          <div className="text-xl font-black text-red-400">{evaluation.stats?.totalFillers || 0}</div>
+                       </div>
+                    </div>
+                    <p className="text-slate-300 text-xs leading-relaxed mb-4">{evaluation.fillerWordUsage}</p>
                     <div className="mt-4 pt-4 border-t border-white/5">
                        <h3 className="font-bold mb-2 text-sm">Response Length</h3>
                        <p className="text-slate-300 text-xs leading-relaxed">{evaluation.averageResponseLength}</p>
@@ -644,6 +963,12 @@ export function InterviewPage() {
 
               <div className="mt-12 flex gap-4">
                  <button 
+                  onClick={downloadCertificate}
+                  className="flex-1 py-4 rounded-xl border border-purple-500/30 bg-purple-500/10 text-sm font-bold text-purple-400 hover:bg-purple-500/20 transition-all flex items-center justify-center gap-2"
+                 >
+                    Download Certificate
+                 </button>
+                 <button 
                   onClick={() => setStep('setup')}
                   className="flex-1 py-4 rounded-xl border border-white/10 text-sm font-bold hover:bg-white/5 transition-all"
                  >
@@ -653,7 +978,7 @@ export function InterviewPage() {
                   onClick={() => navigate('/analytics')}
                   className="flex-1 py-4 rounded-xl bg-white text-black text-sm font-black hover:scale-105 transition-all"
                  >
-                    View Full Statistics
+                    View Statistics
                  </button>
               </div>
            </motion.div>

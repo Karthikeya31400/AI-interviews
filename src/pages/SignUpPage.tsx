@@ -3,8 +3,6 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { motion } from 'motion/react';
 import { Mail, Lock, Loader2, ArrowRight, User } from 'lucide-react';
-import { createUserWithEmailAndPassword, updateProfile } from 'firebase/auth';
-import { auth } from '../lib/firebase';
 
 export function SignUpPage() {
   const [name, setName] = useState('');
@@ -13,7 +11,7 @@ export function SignUpPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  const { signInWithGoogle, user, loading } = useAuth();
+  const { signInWithGoogle, signup, user, loading } = useAuth();
   const navigate = useNavigate();
 
   React.useEffect(() => {
@@ -27,22 +25,11 @@ export function SignUpPage() {
     setIsLoading(true);
     setError(null);
     try {
-      const userCredential = await createUserWithEmailAndPassword(auth, email, password);
-      await updateProfile(userCredential.user, { displayName: name });
+      await signup(email, password, name);
       navigate('/dashboard');
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/email-already-in-use') {
-        setError('This email is already registered. Please sign in instead.');
-      } else if (err.code === 'auth/operation-not-allowed') {
-        setError('Email/Password sign up is currently disabled. Please enable it in the Firebase Console or use Google login.');
-      } else if (err.code === 'auth/weak-password') {
-        setError('Password is too weak. Please use at least 6 characters.');
-      } else if (err.code === 'auth/invalid-email') {
-        setError('Please enter a valid email address.');
-      } else {
-        setError(err.message || 'Failed to create account');
-      }
+      setError(err.message || 'Failed to create account');
     } finally {
       setIsLoading(false);
     }
@@ -56,13 +43,7 @@ export function SignUpPage() {
       navigate('/dashboard');
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/popup-closed-by-user') {
-        setError('The registration popup was closed. Please try again.');
-      } else if (err.code === 'auth/network-request-failed') {
-        setError('Network error. If you are in a preview, try opening the app in a new tab.');
-      } else {
-        setError(err.message || 'Failed to sign in with Google');
-      }
+      setError(err.message || 'Failed to sign in with Google');
     } finally {
       setIsLoading(false);
     }

@@ -3,8 +3,6 @@ import { useNavigate, Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { motion } from 'motion/react';
 import { Mail, Lock, Loader2, ArrowRight } from 'lucide-react';
-import { signInWithEmailAndPassword } from 'firebase/auth';
-import { auth } from '../lib/firebase';
 
 export function LoginPage() {
   const [email, setEmail] = useState('');
@@ -12,7 +10,7 @@ export function LoginPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   
-  const { signInWithGoogle, user, loading } = useAuth();
+  const { signInWithGoogle, login, user, loading } = useAuth();
   const navigate = useNavigate();
 
   React.useEffect(() => {
@@ -26,19 +24,11 @@ export function LoginPage() {
     setIsLoading(true);
     setError(null);
     try {
-      await signInWithEmailAndPassword(auth, email, password);
+      await login(email, password);
       navigate('/dashboard');
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/operation-not-allowed') {
-        setError('Email/Password sign in is currently disabled. Please enable it in the Firebase Console or use Google login.');
-      } else if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
-        setError('Invalid email or password. Please try again.');
-      } else if (err.code === 'auth/too-many-requests') {
-        setError('Too many failed attempts. Please try again later.');
-      } else {
-        setError(err.message || 'Failed to sign in');
-      }
+      setError(err.message || 'Failed to sign in. Please check your credentials.');
     } finally {
       setIsLoading(false);
     }
@@ -52,15 +42,7 @@ export function LoginPage() {
       navigate('/dashboard');
     } catch (err: any) {
       console.error(err);
-      if (err.code === 'auth/popup-closed-by-user') {
-        setError('The login popup was closed before it could complete. Please try again.');
-      } else if (err.code === 'auth/network-request-failed') {
-        setError('Network error or cross-origin block. Try opening the app in a new tab if you are in a preview window.');
-      } else if (err.code === 'auth/internal-error') {
-        setError('Internal authentication error. Please try again or use another login method.');
-      } else {
-        setError(err.message || 'Failed to sign in with Google');
-      }
+      setError(err.message || 'Failed to sign in with Google');
     } finally {
       setIsLoading(false);
     }

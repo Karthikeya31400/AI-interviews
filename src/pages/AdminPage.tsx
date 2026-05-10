@@ -9,14 +9,7 @@ import {
   Activity,
   AlertCircle
 } from 'lucide-react';
-import { db } from '../lib/firebase';
-import { 
-  collection, 
-  query, 
-  getDocs, 
-  updateDoc, 
-  doc 
-} from 'firebase/firestore';
+import { dataService } from '../services/dataService';
 import { motion } from 'motion/react';
 
 interface UserProfile {
@@ -24,7 +17,7 @@ interface UserProfile {
   email: string;
   displayName: string;
   role: string;
-  createdAt: any;
+  createdAt: number;
 }
 
 export function AdminPage() {
@@ -39,12 +32,7 @@ export function AdminPage() {
   const fetchUsers = async () => {
     setLoading(true);
     try {
-      const q = query(collection(db, 'users'));
-      const querySnapshot = await getDocs(q);
-      const userList: UserProfile[] = [];
-      querySnapshot.forEach((doc) => {
-        userList.push(doc.data() as UserProfile);
-      });
+      const userList = await dataService.getAllUsers();
       setUsers(userList);
     } catch (error) {
       console.error("Error fetching users:", error);
@@ -56,9 +44,7 @@ export function AdminPage() {
   const toggleRole = async (userId: string, currentRole: string) => {
     const newRole = currentRole === 'ADMIN' ? 'USER' : 'ADMIN';
     try {
-      await updateDoc(doc(db, 'users', userId), {
-        role: newRole
-      });
+      await dataService.updateUserRole(userId, newRole);
       setUsers(prev => prev.map(u => u.uid === userId ? { ...u, role: newRole } : u));
     } catch (error) {
       console.error("Error updating role:", error);
@@ -173,7 +159,7 @@ export function AdminPage() {
                              </td>
                              <td className="px-8 py-6">
                                 <div className="text-sm text-slate-400 font-medium">
-                                   {user.createdAt ? new Date(user.createdAt.seconds * 1000).toLocaleDateString() : 'Dec 2023'}
+                                   {user.createdAt ? new Date(user.createdAt).toLocaleDateString() : 'Dec 2023'}
                                 </div>
                              </td>
                              <td className="px-8 py-6 text-right">

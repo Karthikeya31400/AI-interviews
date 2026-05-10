@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   Activity, 
   TrendingUp, 
@@ -9,7 +9,8 @@ import {
   BarChart3,
   PieChart as PieChartIcon,
   Search,
-  Calendar
+  Calendar,
+  Loader2
 } from 'lucide-react';
 import { 
   AreaChart, 
@@ -26,6 +27,8 @@ import {
   Pie
 } from 'recharts';
 import { motion } from 'motion/react';
+import { useAuth } from '../context/AuthContext';
+import { dataService } from '../services/dataService';
 
 const interviewData = [
   { name: 'Jan', technical: 65, behavioral: 45, hr: 80 },
@@ -50,6 +53,56 @@ const skillProgress = [
 ];
 
 export function AnalyticsPage() {
+  const { user } = useAuth();
+  const [interviews, setInterviews] = useState<any[]>([]);
+  const [analyses, setAnalyses] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    async function fetchData() {
+      if (!user) return;
+      try {
+        const [intv, anls] = await Promise.all([
+          dataService.getInterviews(user.uid),
+          dataService.getResumeAnalyses(user.uid)
+        ]);
+        setInterviews(intv);
+        setAnalyses(anls);
+      } catch (error) {
+        console.error('Error fetching analytics data:', error);
+      } finally {
+        setLoading(false);
+      }
+    }
+    fetchData();
+  }, [user]);
+
+  // Derived stats
+  const avgScore = interviews.length > 0 
+    ? Math.round(interviews.reduce((acc, curr) => acc + curr.score, 0) / interviews.length) 
+    : 0;
+  
+  const latestAnalysis = analyses[0]?.analysis;
+  const atsScore = latestAnalysis?.atsScore || 0;
+
+  const chartData = interviews.slice(0, 6).reverse().map(i => ({
+    name: new Date(i.createdAt).toLocaleDateString(undefined, { month: 'short' }),
+    score: i.score,
+    technical: i.type === 'Technical' ? i.score : 0,
+    behavioral: i.type === 'Behavioral' ? i.score : 0
+  }));
+
+  if (loading) {
+     return (
+       <div className="flex items-center justify-center h-[calc(100vh-12rem)]">
+         <div className="text-center">
+           <Loader2 className="w-12 h-12 text-purple-600 animate-spin mx-auto mb-4" />
+           <p className="text-slate-400 font-bold uppercase tracking-widest text-xs">Aggregating Insights...</p>
+         </div>
+       </div>
+     );
+  }
+
   return (
     <div className="max-w-7xl mx-auto space-y-8 pb-20">
       <div className="flex flex-col md:flex-row md:items-end justify-between gap-6">
@@ -72,10 +125,10 @@ export function AnalyticsPage() {
       {/* Hero Stats */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-6">
          {[
-           { label: 'Avg score', value: '88.4%', trend: '+4.2%', icon: TrendingUp, color: 'text-green-400' },
-           { label: 'Interviews', value: '24', trend: 'Total', icon: Users, color: 'text-purple-400' },
-           { label: 'Readiness', value: '92/100', trend: 'High', icon: Target, iconColor: 'text-cyan-400' },
-           { label: 'Milestones', value: '12', trend: 'Reached', icon: Award, color: 'text-yellow-400' }
+           { label: 'Avg score', value: `${avgScore}%`, trend: '+4.2%', icon: TrendingUp, color: 'text-green-400' },
+           { label: 'Interviews', value: interviews.length.toString(), trend: 'Total', icon: Users, color: 'text-purple-400' },
+           { label: 'Readiness', value: `${atsScore}/100`, trend: 'High', icon: Target, iconColor: 'text-cyan-400' },
+           { label: 'Milestones', value: (interviews.length > 0 ? 3 : 0).toString(), trend: 'Reached', icon: Award, color: 'text-yellow-400' }
          ].map((stat, i) => (
            <motion.div 
              key={i}
@@ -120,7 +173,7 @@ export function AnalyticsPage() {
 
             <div className="h-80 w-full">
                <ResponsiveContainer width="100%" height="100%">
-                  <AreaChart data={interviewData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
+                  <AreaChart data={chartData} margin={{ top: 0, right: 0, left: -20, bottom: 0 }}>
                      <defs>
                         <linearGradient id="colorTechnical" x1="0" y1="0" x2="0" y2="1">
                            <stop offset="5%" stopColor="#8b5cf6" stopOpacity={0.3}/>
@@ -198,7 +251,7 @@ export function AnalyticsPage() {
                </ResponsiveContainer>
                <div className="absolute flex flex-col items-center">
                   <div className="text-xs font-black text-slate-500 uppercase">Score</div>
-                  <div className="text-3xl font-black">94</div>
+                  <div className="text-3xl font-black">{atsScore}</div>
                </div>
             </div>
 
@@ -257,14 +310,14 @@ export function AnalyticsPage() {
                <div className="p-6 rounded-2xl bg-white/5 border border-white/5 backdrop-blur-sm">
                   <div className="text-[10px] font-black uppercase tracking-widest text-cyan-400 mb-2">Core Advantage</div>
                   <p className="text-sm text-slate-200 font-medium leading-relaxed italic">
-                    "Your technical articulate clarity is in the top 5% of candidates we've screened for Senior FE roles. You excel at translating complex architecture into digestible logic."
+                    {latestAnalysis?.feedback || "Start by uploading your resume for a diagnostic report."}
                   </p>
                </div>
 
                <div className="p-6 rounded-2xl bg-white/5 border border-white/5 backdrop-blur-sm">
                   <div className="text-[10px] font-black uppercase tracking-widest text-purple-400 mb-2">Growth Vector</div>
                   <p className="text-sm text-slate-200 font-medium leading-relaxed italic">
-                    "Strategic leadership presence is your next breakthrough. Focus on quantifying project ownership impacts in behavioral mocks."
+                    {latestAnalysis?.improvements?.[0] || "Practice mock interviews to identify your strengths and weaknesses."}
                   </p>
                </div>
             </div>

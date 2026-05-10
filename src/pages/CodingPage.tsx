@@ -123,11 +123,14 @@ export function CodingPage() {
     if (!selectedProblem) return;
     setAiLoading(true);
     try {
-      const prompt = `Give me a small, helpful hint for the coding problem "${selectedProblem.title}" in the topic "${selectedTopic}". 
-      The current code is: \n${code}\n
-      Don't give the full solution, just a conceptual hint or a nudge in the right direction.`;
-      
-      const response = await aiService.careerMentorChat([], prompt);
+      const description = selectedProblem.description || "Given an array of integers nums and an integer target, return indices of the two numbers such that they add up to target.";
+      const response = await aiService.getCodingHint(
+        selectedProblem.title,
+        selectedTopic,
+        description,
+        code,
+        language
+      );
       setHint(response);
     } catch (error) {
       console.error(error);

@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useState } from 'react';
 import { 
   ArrowUpRight, 
   Clock, 
@@ -8,7 +8,8 @@ import {
   Zap,
   TrendingUp,
   Target,
-  BrainCircuit
+  BrainCircuit,
+  Loader2
 } from 'lucide-react';
 import { motion } from 'motion/react';
 import { 
@@ -24,6 +25,8 @@ import {
 } from 'recharts';
 import { useAuth } from '../context/AuthContext';
 import { useNavigate } from 'react-router-dom';
+import { dataService } from '../services/dataService';
+import { cn } from '../lib/utils';
 
 const data = [
   { name: 'Mon', score: 65 },
@@ -38,6 +41,34 @@ const data = [
 export function Dashboard() {
   const { user } = useAuth();
   const navigate = useNavigate();
+  const [recentSessions, setRecentSessions] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [resumeAnalysis, setResumeAnalysis] = useState<any>(null);
+
+  useEffect(() => {
+    async function fetchData() {
+      if (!user) return;
+      setLoading(true);
+      try {
+        const [sessions, analyses] = await Promise.all([
+          dataService.getInterviews(user.uid),
+          dataService.getResumeAnalyses(user.uid)
+        ]);
+        setRecentSessions(sessions.slice(0, 5));
+        if (analyses.length > 0) {
+          setResumeAnalysis(analyses[0].analysis);
+        }
+      } catch (error) {
+        console.error('Error fetching dashboard data:', error);
+      } finally {
+        setLoading(false);
+      }
+    }
+
+    fetchData();
+  }, [user]);
+
+  const atsScore = resumeAnalysis?.atsScore || 0;
 
   return (
     <div className="space-y-8 max-w-7xl mx-auto">
@@ -48,12 +79,12 @@ export function Dashboard() {
             Welcome back, {user?.displayName?.split(' ')[0] || 'Explorer'}! 👋
           </h1>
           <p className="text-slate-400 font-medium leading-relaxed">
-            You've completed <span className="text-white font-bold">12 sessions</span> this week. Performance is up <span className="text-emerald-400 font-bold">+15%</span>.
+            Ready to ace your next interview? You have <span className="text-white font-bold">{recentSessions.length} recent sessions</span>.
           </p>
         </div>
         <div className="flex items-center gap-3 text-[10px] font-black uppercase tracking-widest text-slate-500 bg-white/5 px-4 py-2 rounded-full border border-white/5">
           <Clock className="w-3 h-3 text-brand-secondary" />
-          Last active: 2 hours ago
+          Last active: {recentSessions[0] ? new Date(recentSessions[0].createdAt).toLocaleDateString() : 'Just now'}
         </div>
       </div>
 
@@ -110,21 +141,33 @@ export function Dashboard() {
             <div className="glass p-8 rounded-[2rem]">
                <h3 className="text-lg font-bold mb-6">Recent Sessions</h3>
                <div className="space-y-4">
-                  {[
-                    { title: 'Google Prep L5', score: 86, tag: 'System Design', time: '2h ago', color: 'text-emerald-400', bg: 'bg-emerald-500/10' },
-                    { title: 'Stripe Behavioral', score: 72, tag: 'HR Rounds', time: 'Yesterday', color: 'text-orange-400', bg: 'bg-orange-500/10' },
-                  ].map((session, i) => (
-                    <div key={i} className="flex items-center p-4 rounded-2xl bg-white/5 border border-white/5 group hover:border-white/10 transition-all cursor-pointer">
-                       <div className={`w-10 h-10 rounded-xl ${session.bg} flex items-center justify-center ${session.color} text-sm font-black shadow-inner`}>
-                          {session.score}
-                       </div>
-                       <div className="ml-4">
-                          <div className="text-sm font-bold text-white group-hover:text-brand-secondary transition-colors">{session.title}</div>
-                          <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">{session.time} • {session.tag}</div>
-                       </div>
-                       <ArrowUpRight className="ml-auto w-4 h-4 text-slate-600 group-hover:text-white transition-all transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                  {loading ? (
+                    <div className="flex items-center justify-center py-12">
+                       <Loader2 className="w-6 h-6 text-purple-600 animate-spin" />
                     </div>
-                  ))}
+                  ) : recentSessions.length > 0 ? (
+                    recentSessions.map((session, i) => (
+                      <div key={i} className="flex items-center p-4 rounded-2xl bg-white/5 border border-white/5 group hover:border-white/10 transition-all cursor-pointer">
+                         <div className={cn(
+                           "w-10 h-10 rounded-xl flex items-center justify-center text-sm font-black shadow-inner",
+                           session.score > 80 ? "bg-emerald-500/10 text-emerald-400" : "bg-orange-500/10 text-orange-400"
+                         )}>
+                            {session.score}
+                         </div>
+                         <div className="ml-4">
+                            <div className="text-sm font-bold text-white group-hover:text-brand-secondary transition-colors truncate max-w-[150px]">{session.position}</div>
+                            <div className="text-[10px] text-slate-500 font-bold uppercase tracking-widest">
+                               {new Date(session.createdAt).toLocaleDateString()} • {session.type}
+                            </div>
+                         </div>
+                         <ArrowUpRight className="ml-auto w-4 h-4 text-slate-600 group-hover:text-white transition-all transform group-hover:translate-x-0.5 group-hover:-translate-y-0.5" />
+                      </div>
+                    ))
+                  ) : (
+                    <div className="py-8 text-center bg-white/5 rounded-2xl border border-dashed border-white/10">
+                       <p className="text-xs text-slate-500 font-bold uppercase">No sessions found</p>
+                    </div>
+                  )}
                </div>
             </div>
           </div>
@@ -178,13 +221,13 @@ export function Dashboard() {
                    <circle cx="50" cy="50" r="42" fill="none" stroke="rgba(255,255,255,0.05)" strokeWidth="8"/>
                    <motion.circle 
                      initial={{ strokeDashoffset: 264 }}
-                     animate={{ strokeDashoffset: 264 - (264 * 0.82) }}
+                     animate={{ strokeDashoffset: 264 - (264 * (atsScore / 100)) }}
                      cx="50" cy="50" r="42" fill="none" stroke="#06B6D4" strokeWidth="8" 
                      strokeDasharray="264" strokeLinecap="round"
                    />
                 </svg>
                 <div className="absolute text-center">
-                   <span className="text-5xl font-black block">82</span>
+                   <span className="text-5xl font-black block">{atsScore}</span>
                    <span className="text-[10px] text-slate-500 font-black uppercase tracking-tighter">ATS Score</span>
                 </div>
              </div>
@@ -192,8 +235,12 @@ export function Dashboard() {
              <div className="w-full space-y-3 mb-8">
                 <div className="p-4 rounded-2xl bg-white/5 border-l-4 border-yellow-500 flex justify-between items-center">
                    <div>
-                      <div className="text-xs font-black uppercase tracking-widest text-white mb-0.5">3 Skills Missing</div>
-                      <div className="text-[10px] text-slate-500 font-medium">Kubernetes, GraphQL, Redis</div>
+                      <div className="text-xs font-black uppercase tracking-widest text-white mb-0.5">
+                         {resumeAnalysis?.missingKeywords?.length || 0} Skills Missing
+                      </div>
+                      <div className="text-[10px] text-slate-500 font-medium">
+                         {resumeAnalysis?.missingKeywords?.slice(0, 3).join(', ') || "No missing critical skills found."}
+                      </div>
                    </div>
                 </div>
                 <div className="p-4 rounded-2xl bg-white/5 border-l-4 border-emerald-500">
