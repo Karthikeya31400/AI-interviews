@@ -43,4 +43,3 @@ npm test
 
 ---
 
-Built with ❤️ using Google AI Studio.
